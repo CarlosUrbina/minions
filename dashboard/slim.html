@@ -214,6 +214,97 @@
     }
     .chat-send:hover { filter: brightness(1.1); }
     .chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+    .chat-stop {
+      padding: 8px 12px;
+      background: var(--surface2);
+      color: var(--red);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 11px;
+      cursor: pointer;
+      align-self: flex-end;
+      display: none;
+    }
+    .chat-stop:hover { filter: brightness(1.1); }
+
+    /* Tool-call progress lines rendered above the streaming assistant
+       bubble — mirrors the dim monospace look of the existing CC. */
+    .chat-tools {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 4px;
+    }
+    .chat-tool {
+      color: var(--muted);
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-tool::before { content: "● "; }
+
+    .chat-thinking {
+      color: var(--muted);
+      font-size: 11px;
+      font-style: italic;
+    }
+    .chat-thinking-dots {
+      display: inline-flex;
+      gap: 3px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .chat-thinking-dots > span {
+      width: 4px;
+      height: 4px;
+      background: var(--blue);
+      border-radius: 50%;
+      animation: dotPulse 1.2s infinite;
+    }
+    .chat-thinking-dots > span:nth-child(2) { animation-delay: 0.2s; }
+    .chat-thinking-dots > span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dotPulse {
+      0%, 80%, 100% { opacity: 0.3; }
+      40%           { opacity: 1; }
+    }
+
+    /* Per-action status row (CC ===ACTIONS=== executed by the server) */
+    .chat-action {
+      align-self: flex-start;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 10px;
+      border: 1px dashed var(--border);
+      color: var(--muted);
+    }
+    .chat-action.ok    { color: var(--green); }
+    .chat-action.warn  { color: #d29922; }
+    .chat-action.err   { color: var(--red); }
+
+    /* Lightweight markdown styling inside assistant bubbles. */
+    .chat-msg.assistant code,
+    .chat-msg.assistant pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .chat-msg.assistant code {
+      background: var(--bg);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    .chat-msg.assistant pre {
+      background: var(--bg);
+      padding: 8px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 11px;
+      margin: 4px 0;
+    }
+    .chat-msg.assistant pre code { background: none; padding: 0; }
+    .chat-msg.assistant a { color: var(--blue); }
+    .chat-msg.assistant strong { color: var(--text); }
 
     /* ── Settings dialog ─────────────────────────────────────── */
     .modal-bg {
@@ -266,6 +357,7 @@
 <div class="topbar">
   <div class="topbar-title">Minions <span class="badge">SLIM UX</span></div>
   <div class="topbar-actions">
+    <button class="icon-btn" title="New chat (clears session)" onclick="slimChatNew()">&#x270E;</button>
     <button class="icon-btn" title="Settings" onclick="openSlimSettings()">&#9881;</button>
   </div>
 </div>
@@ -283,6 +375,7 @@
         rows="1"
         placeholder="Ask anything or give a command... (Enter to send, Shift+Enter for newline)"
       ></textarea>
+      <button id="chat-stop" class="chat-stop" type="button" title="Stop the in-flight response">Stop</button>
       <button id="chat-send" class="chat-send" type="button">Send</button>
     </div>
   </div>
@@ -404,57 +497,316 @@
   }
 
   // ── Chatbox wired to /api/command-center/stream ──────────────
-  var sessionId = null;     // server returns one on first reply, send back to keep session
+  // Mirrors the full dashboard's command center: SSE streaming, tool-call
+  // progress, abort, and per-tab session continuity. Persists sessionId +
+  // recent message history in localStorage so reloads thread into the same
+  // server session. Multi-tab UI from the full dashboard is intentionally
+  // out of scope — slim is a single conversation per browser tab.
+
+  var SLIM_STORAGE_KEY = 'slim-cc-state-v1';
+  var SLIM_TAB_KEY     = 'slim-cc-tabid-v1';
+  var SLIM_MAX_MESSAGES = 30;
+  var STREAM_TIMEOUT_MS = (60 * 60 * 1000) + 60000;
+
+  var sessionId = null;       // server-issued session id (carries history)
+  var messages = [];          // [{ role, text }] for persistence + redraw
   var sending = false;
-  var msgsEl = document.getElementById('chat-messages');
+  var abortController = null;
+
+  // Stable per-browser-tab id so /api/command-center/abort and the
+  // server-side cc-sessions.json bookkeeping target this tab specifically.
+  var tabId = (function() {
+    try {
+      var t = sessionStorage.getItem(SLIM_TAB_KEY);
+      if (t) return t;
+      t = 'slim-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      sessionStorage.setItem(SLIM_TAB_KEY, t);
+      return t;
+    } catch (_e) {
+      return 'slim-' + Date.now().toString(36);
+    }
+  })();
+
+  var msgsEl  = document.getElementById('chat-messages');
   var inputEl = document.getElementById('chat-input');
   var sendBtn = document.getElementById('chat-send');
+  var stopBtn = document.getElementById('chat-stop');
 
+  // ── Persistence ──────────────────────────────────────────────
+  function loadState() {
+    try {
+      var raw = localStorage.getItem(SLIM_STORAGE_KEY);
+      if (!raw) return;
+      var data = JSON.parse(raw) || {};
+      sessionId = data.sessionId || null;
+      messages = Array.isArray(data.messages) ? data.messages.slice(-SLIM_MAX_MESSAGES) : [];
+    } catch (_e) { /* ignore */ }
+  }
+  var saveDebounce = null;
+  function saveState() {
+    if (saveDebounce) return;
+    saveDebounce = setTimeout(function() {
+      saveDebounce = null;
+      try {
+        localStorage.setItem(SLIM_STORAGE_KEY, JSON.stringify({
+          sessionId: sessionId,
+          messages: messages.slice(-SLIM_MAX_MESSAGES),
+        }));
+      } catch (_e) { /* localStorage might be full */ }
+    }, 300);
+  }
+
+  // ── Minimal markdown renderer (bold, italic, code, code-fence,
+  // links). Keeps slim self-contained — no need to pull in renderMd. ──
+  function escHtmlChat(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function renderMarkdown(text) {
+    if (!text) return '';
+    var html = escHtmlChat(text);
+    // Code fences first (before other inline transforms can mangle them).
+    var codeSlots = [];
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, _lang, code) {
+      codeSlots.push('<pre><code>' + code + '</code></pre>');
+      return ' CB' + (codeSlots.length - 1) + ' ';
+    });
+    // Inline code.
+    html = html.replace(/`([^`\n]+)`/g, function(_, code) {
+      codeSlots.push('<code>' + code + '</code>');
+      return ' CB' + (codeSlots.length - 1) + ' ';
+    });
+    // Bold / italic.
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
+    // Links: [text](url) — only http/https/mailto allowed.
+    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function(_, label, href) {
+      if (!/^(https?:|mailto:|\/)/i.test(href)) return label;
+      return '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>';
+    });
+    // Restore code slots.
+    html = html.replace(/ CB(\d+) /g, function(_, i) { return codeSlots[+i] || ''; });
+    return html;
+  }
+
+  // ── Render helpers ───────────────────────────────────────────
   function clearEmpty() {
     var empty = msgsEl.querySelector('.chat-empty');
     if (empty) empty.remove();
   }
-
-  function addMsg(role, text) {
+  function scrollToBottom() {
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+  function appendBubble(role, text) {
     clearEmpty();
     var div = document.createElement('div');
     div.className = 'chat-msg ' + role;
-    div.textContent = text;
+    if (role === 'assistant') div.innerHTML = renderMarkdown(text);
+    else div.textContent = text;
     msgsEl.appendChild(div);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollToBottom();
     return div;
+  }
+  function appendActionStatus(severity, label) {
+    var div = document.createElement('div');
+    div.className = 'chat-action ' + (severity || '');
+    div.textContent = label;
+    msgsEl.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  // Format a tool-use input the same way the full dashboard does for the
+  // dim "● Reading foo.js" / "$ git status" progress lines.
+  function formatToolSummary(name, input) {
+    var inp = input || {};
+    switch (name) {
+      case 'Bash': {
+        var cmd = String(inp.command || '');
+        if (cmd.length > 80) cmd = cmd.slice(0, 77) + '...';
+        return '$ ' + cmd;
+      }
+      case 'Read':  return 'Reading ' + (inp.file_path || '');
+      case 'Edit':  return 'Editing ' + (inp.file_path || '');
+      case 'Write': return 'Writing ' + (inp.file_path || '');
+      case 'Grep':  return 'Searching `' + (inp.pattern || '') + '` in ' + (inp.path || '.');
+      case 'Glob':  return 'Glob ' + (inp.pattern || '');
+      case 'WebFetch':  return 'Fetch ' + (inp.url || '');
+      case 'WebSearch': return 'Search "' + (inp.query || '') + '"';
+      case 'TodoWrite': {
+        var items = Array.isArray(inp.todos) ? inp.todos : [];
+        return 'Update todos (' + items.length + ' items)';
+      }
+      default: {
+        var keys = Object.keys(inp);
+        if (keys.length === 0) return name + '()';
+        var v = String(inp[keys[0]] || '');
+        if (v.length > 40) v = v.slice(0, 37) + '...';
+        return name + '(' + keys[0] + ': ' + v + ')';
+      }
+    }
+  }
+
+  // ── Streaming bubble: holds tool-progress lines + live text + thinking
+  function buildStreamBubble() {
+    clearEmpty();
+    var div = document.createElement('div');
+    div.className = 'chat-msg assistant streaming';
+
+    var tools = document.createElement('div');
+    tools.className = 'chat-tools';
+    div.appendChild(tools);
+
+    var body = document.createElement('div');
+    body.className = 'chat-body';
+    div.appendChild(body);
+
+    var thinking = document.createElement('div');
+    thinking.className = 'chat-thinking';
+    thinking.innerHTML = 'Thinking<span class="chat-thinking-dots"><span></span><span></span><span></span></span>';
+    div.appendChild(thinking);
+
+    msgsEl.appendChild(div);
+    scrollToBottom();
+
+    return {
+      root: div,
+      tools: tools,
+      body: body,
+      thinking: thinking,
+      addTool: function(name, input) {
+        var line = document.createElement('div');
+        line.className = 'chat-tool';
+        line.textContent = formatToolSummary(name, input);
+        tools.appendChild(line);
+        scrollToBottom();
+      },
+      setText: function(text) {
+        body.innerHTML = renderMarkdown(text || '');
+        scrollToBottom();
+      },
+      removeThinking: function() {
+        if (thinking && thinking.parentNode) thinking.parentNode.removeChild(thinking);
+      },
+      finalize: function(text) {
+        // Convert from streaming to a normal assistant bubble.
+        if (thinking && thinking.parentNode) thinking.parentNode.removeChild(thinking);
+        body.innerHTML = renderMarkdown(text || '');
+        div.classList.remove('streaming');
+        scrollToBottom();
+      },
+      replaceWithError: function(message) {
+        if (thinking && thinking.parentNode) thinking.parentNode.removeChild(thinking);
+        div.className = 'chat-msg error';
+        div.innerHTML = '';
+        div.textContent = message;
+        scrollToBottom();
+      },
+    };
   }
 
   function setSending(on) {
     sending = on;
     sendBtn.disabled = on;
     sendBtn.textContent = on ? 'Sending…' : 'Send';
+    stopBtn.style.display = on ? 'block' : 'none';
+    inputEl.disabled = on;
   }
 
+  // Restore previously rendered conversation on initial load.
+  function rerenderHistory() {
+    msgsEl.innerHTML = '';
+    if (!messages.length) {
+      var empty = document.createElement('div');
+      empty.className = 'chat-empty';
+      empty.textContent = 'No messages yet — say hi to Command Center.';
+      msgsEl.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      if (m.role === 'action') appendActionStatus(m.severity || '', m.text || '');
+      else appendBubble(m.role, m.text || '');
+    }
+  }
+  loadState();
+  rerenderHistory();
+
+  // ── Action result formatting (mirrors CC's per-action status pills) ──
+  function describeAction(action) {
+    if (!action || !action.type) return 'action';
+    var t = action.type;
+    var label = action.title || action.id || action.file || action.agent || '';
+    return label ? t + ': ' + label : t;
+  }
+  function renderActionResults(actions, results) {
+    if (!actions || !actions.length) return;
+    for (var i = 0; i < actions.length; i++) {
+      var action = actions[i];
+      var r = (results && results[i]) || null;
+      var label = describeAction(action);
+      var severity = 'ok';
+      var symbol = '✓';
+      var detail = '';
+      if (r && r.error) { severity = 'err'; symbol = '✗'; detail = ' — ' + r.error; }
+      else if (r && r.warning) { severity = 'warn'; symbol = 'ℹ'; detail = ' — ' + r.warning; }
+      else if (r && r.duplicate) { severity = 'warn'; symbol = '↺'; detail = ' (already exists)'; }
+      var text = symbol + ' ' + label + detail;
+      appendActionStatus(severity, text);
+      messages.push({ role: 'action', severity: severity, text: text });
+    }
+    saveState();
+  }
+
+  // ── Send / stream / abort ────────────────────────────────────
   async function sendMessage() {
     if (sending) return;
     var text = inputEl.value.trim();
     if (!text) return;
-    addMsg('user', text);
+
+    appendBubble('user', text);
+    messages.push({ role: 'user', text: text });
+    saveState();
+
     inputEl.value = '';
+    inputEl.style.height = 'auto';
     setSending(true);
 
-    var streamingDiv = addMsg('assistant', '');
+    var stream = buildStreamBubble();
     var streamedText = '';
+    abortController = new AbortController();
+    var userAborted = false;
+    var timeoutSignal = null;
+    try { timeoutSignal = AbortSignal.timeout(STREAM_TIMEOUT_MS); } catch (_e) { /* old browsers */ }
+    var signal = timeoutSignal && AbortSignal.any
+      ? AbortSignal.any([abortController.signal, timeoutSignal])
+      : abortController.signal;
 
     try {
       var res = await fetch('/api/command-center/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId: sessionId }),
+        body: JSON.stringify({ message: text, tabId: tabId, sessionId: sessionId }),
+        signal: signal,
       });
       if (!res.ok) {
         var errBody = await res.text().catch(function() { return ''; });
         throw new Error('HTTP ' + res.status + (errBody ? ': ' + errBody.slice(0, 200) : ''));
       }
+      if (!res.body || !res.body.getReader) {
+        throw new Error('Streaming not supported by this browser.');
+      }
+
       var reader = res.body.getReader();
       var decoder = new TextDecoder();
       var buf = '';
+      var doneEvt = null;
+      var errorEvt = null;
+
       while (true) {
         var r = await reader.read();
         if (r.done) break;
@@ -468,29 +820,102 @@
           try { evt = JSON.parse(line.slice(6)); } catch (_e) { continue; }
           if (evt.type === 'chunk') {
             streamedText += (evt.text || '');
-            streamingDiv.textContent = streamedText;
-            msgsEl.scrollTop = msgsEl.scrollHeight;
+            stream.setText(streamedText);
+          } else if (evt.type === 'tool') {
+            stream.addTool(evt.name, evt.input || {});
+          } else if (evt.type === 'heartbeat') {
+            /* server keep-alive — ignored on purpose */
           } else if (evt.type === 'done') {
-            if (evt.text) streamedText = evt.text; // server-side cleaned text wins
-            streamingDiv.textContent = streamedText || '(no response)';
-            if (evt.sessionId !== undefined) sessionId = evt.sessionId || null;
+            doneEvt = evt;
           } else if (evt.type === 'error') {
-            streamingDiv.className = 'chat-msg error';
-            streamingDiv.textContent = evt.error || 'Error';
+            errorEvt = evt;
           }
-          // Other event types (heartbeat, tool, etc.) ignored for now.
         }
       }
+
+      if (errorEvt) {
+        stream.replaceWithError(errorEvt.error || 'Error');
+        messages.push({ role: 'error', text: errorEvt.error || 'Error' });
+        saveState();
+        return;
+      }
+
+      if (doneEvt) {
+        var finalText = (doneEvt.text != null && doneEvt.text !== '') ? doneEvt.text : streamedText;
+        stream.finalize(finalText || '(no response)');
+        messages.push({ role: 'assistant', text: finalText || '(no response)' });
+        if (doneEvt.sessionId !== undefined) sessionId = doneEvt.sessionId || null;
+        saveState();
+        if (doneEvt.actionParseError) {
+          var pe = '⚠️ Actions block emitted but JSON could not be parsed — no actions executed.';
+          appendActionStatus('err', pe);
+          messages.push({ role: 'action', severity: 'err', text: pe });
+          saveState();
+        }
+        if (doneEvt.actions && doneEvt.actions.length > 0) {
+          renderActionResults(doneEvt.actions, doneEvt.actionResults || []);
+        }
+      } else {
+        // No terminal event seen — stream ended early.
+        stream.finalize(streamedText || '(stream ended before completion)');
+        messages.push({ role: 'assistant', text: streamedText || '(stream ended before completion)' });
+        saveState();
+      }
     } catch (e) {
-      streamingDiv.className = 'chat-msg error';
-      streamingDiv.textContent = 'Send failed: ' + e.message;
+      if (e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || '')))) {
+        userAborted = true;
+        if (streamedText) {
+          stream.finalize(streamedText);
+          messages.push({ role: 'assistant', text: streamedText });
+        } else {
+          stream.replaceWithError('Stopped.');
+          messages.push({ role: 'error', text: 'Stopped.' });
+        }
+        saveState();
+      } else {
+        var msg = 'Send failed: ' + (e && e.message ? e.message : e);
+        stream.replaceWithError(msg);
+        messages.push({ role: 'error', text: msg });
+        saveState();
+      }
     } finally {
       setSending(false);
-      inputEl.focus();
+      abortController = null;
+      if (!userAborted) inputEl.focus();
     }
   }
 
+  function abortInFlight() {
+    if (!sending || !abortController) return;
+    // Tell the server to drop the live stream for our tab; ignore failures
+    // (the AbortController also closes the local fetch).
+    try {
+      fetch('/api/command-center/abort', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabId: tabId }),
+      }).catch(function() {});
+    } catch (_e) { /* ignore */ }
+    try { abortController.abort(); } catch (_e) { /* ignore */ }
+  }
+
+  async function slimChatNew() {
+    if (sending) abortInFlight();
+    sessionId = null;
+    messages = [];
+    saveState();
+    rerenderHistory();
+    // Best-effort: ask the server to drop our tab session so the next
+    // message starts a fresh conversation server-side too.
+    try {
+      fetch('/api/cc-sessions/' + encodeURIComponent(tabId), { method: 'DELETE' }).catch(function() {});
+    } catch (_e) { /* ignore */ }
+    inputEl.focus();
+  }
+  window.slimChatNew = slimChatNew;
+
   sendBtn.addEventListener('click', sendMessage);
+  stopBtn.addEventListener('click', abortInFlight);
   inputEl.addEventListener('keydown', function(ev) {
     if (ev.key === 'Enter' && !ev.shiftKey) {
       ev.preventDefault();
