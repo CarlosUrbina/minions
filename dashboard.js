@@ -6626,6 +6626,50 @@ What would you like to discuss or change? When you're happy, say "approve" and I
     } catch (e) { return jsonReply(res, e.statusCode || 500, { error: e.message }); }
   }
 
+  // Placeholder screen for the experimental redesigned dashboard ("Slim UX").
+  // Gated by the 'slim-ux' feature flag — checked at request time so toggling
+  // via POST /api/features/toggle takes effect without a restart. When the
+  // flag is off, return 404 so the route does not leak the placeholder.
+  async function handleSlimUx(req, res) {
+    try {
+      if (!features.isFeatureOn('slim-ux', CONFIG)) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not Found');
+        return;
+      }
+      const html = '<!doctype html>\n'
+        + '<html lang="en">\n'
+        + '<head>\n'
+        + '  <meta charset="utf-8">\n'
+        + '  <title>Slim UX — coming soon</title>\n'
+        + '  <meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        + '  <style>\n'
+        + '    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }\n'
+        + '    .card { max-width: 560px; padding: 48px 40px; text-align: center; }\n'
+        + '    h1 { font-size: 28px; margin: 0 0 12px; font-weight: 600; }\n'
+        + '    p { color: #8b949e; line-height: 1.6; margin: 8px 0; }\n'
+        + '    code { background: #161b22; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }\n'
+        + '    a { color: #58a6ff; text-decoration: none; }\n'
+        + '    a:hover { text-decoration: underline; }\n'
+        + '  </style>\n'
+        + '</head>\n'
+        + '<body>\n'
+        + '  <div class="card">\n'
+        + '    <h1>Slim UX — coming soon</h1>\n'
+        + '    <p>This is a placeholder for a future redesigned, slimmed-down dashboard surface.</p>\n'
+        + '    <p>Gated behind the <code>slim-ux</code> feature flag. Toggle it via <code>POST /api/features/toggle</code> or the dashboard Settings &rarr; experimental flags.</p>\n'
+        + '    <p><a href="/">Back to dashboard</a></p>\n'
+        + '  </div>\n'
+        + '</body>\n'
+        + '</html>\n';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(html);
+    } catch (e) { return jsonReply(res, e.statusCode || 500, { error: e.message }); }
+  }
+
   async function handleHealth(req, res) {
     const engine = getEngineState();
     const agents = getAgents();
@@ -7414,6 +7458,11 @@ What would you like to discuss or change? When you're happy, say "approve" and I
     // Feature flags (experimental / in-progress UX gates — see engine/features.js)
     { method: 'GET', path: '/api/features', desc: 'List registered feature flags with current enabled state', handler: handleFeaturesList },
     { method: 'POST', path: '/api/features/toggle', desc: 'Enable/disable a registered feature flag', params: 'id, enabled', handler: handleFeaturesToggle },
+
+    // Slim UX placeholder — gated behind the 'slim-ux' feature flag. Returns
+    // 404 when disabled so the route does not leak. State is checked at
+    // request time so /api/features/toggle takes effect without a restart.
+    { method: 'GET', path: '/slim', desc: 'Slim UX placeholder screen (gated by slim-ux feature flag)', handler: handleSlimUx },
 
     // Teams Bot Framework webhook
     { method: 'POST', path: '/api/bot', desc: 'Bot Framework webhook for Teams integration', handler: handleTeamsBot },

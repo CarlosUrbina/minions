@@ -3743,9 +3743,17 @@ async function testFeatureFlags() {
     assert.strictEqual(entry.expired, true, 'past-dated expires should set expired=true');
   });
 
-  await test('module live registry stays empty (no test pollution leaked into FEATURES)', () => {
-    assert.deepStrictEqual(Object.keys(features.FEATURES), [],
-      'live FEATURES registry must remain empty — tests pass an explicit registry instead of mutating the module');
+  await test('module live registry has no test pollution (test-* keys must use explicit registry)', () => {
+    const polluted = Object.keys(features.FEATURES).filter(k => /^test[-_]/i.test(k));
+    assert.deepStrictEqual(polluted, [],
+      'tests must pass an explicit registry parameter, not mutate the module live FEATURES');
+    // Each legitimately-registered flag must carry a description and an explicit boolean default.
+    for (const [id, meta] of Object.entries(features.FEATURES)) {
+      assert.ok(meta && typeof meta.description === 'string' && meta.description.length > 0,
+        `feature "${id}" must have a non-empty description`);
+      assert.strictEqual(typeof meta.default, 'boolean',
+        `feature "${id}" must declare an explicit boolean default`);
+    }
   });
 
   await test('dashboard.js requires engine/features and wires /api/features routes', () => {
@@ -3797,6 +3805,33 @@ async function testFeatureFlags() {
       'handleFeaturesToggle must validate id against features.hasFeature');
     assert.ok(/jsonReply\(\s*res\s*,\s*404/.test(slice),
       'handleFeaturesToggle must reply 404 on unknown id');
+  });
+
+  await test("'slim-ux' feature flag is registered with disabled default", () => {
+    assert.ok(features.hasFeature('slim-ux'), "'slim-ux' must be registered in engine/features.js");
+    const meta = features.FEATURES['slim-ux'];
+    assert.strictEqual(meta.default, false, "'slim-ux' must default to disabled");
+    assert.ok(typeof meta.description === 'string' && meta.description.length > 0,
+      "'slim-ux' must have a non-empty description");
+    assert.strictEqual(features.isFeatureOn('slim-ux', {}), false,
+      "isFeatureOn('slim-ux') must be false when neither env nor config sets it");
+    assert.strictEqual(features.isFeatureOn('slim-ux', { features: { 'slim-ux': true } }), true,
+      'config.features["slim-ux"] = true must enable the flag');
+  });
+
+  await test("dashboard.js wires /slim route gated by 'slim-ux' flag", () => {
+    const dashSrc = fs.readFileSync(path.join(MINIONS_DIR, 'dashboard.js'), 'utf8');
+    assert.ok(dashSrc.includes("'/slim'"), "dashboard.js must register the /slim route");
+    assert.ok(/handleSlimUx\b/.test(dashSrc), 'handleSlimUx must be defined and referenced');
+    const start = dashSrc.indexOf('async function handleSlimUx');
+    assert.ok(start >= 0, 'handleSlimUx must be defined as an async function');
+    const slice = dashSrc.slice(start, start + 2500);
+    assert.ok(/features\.isFeatureOn\(\s*['"]slim-ux['"]/.test(slice),
+      'handleSlimUx must gate on features.isFeatureOn("slim-ux", ...)');
+    assert.ok(/statusCode\s*=\s*404/.test(slice),
+      'handleSlimUx must respond 404 when the flag is disabled (no route leak)');
+    assert.ok(/text\/html/.test(slice),
+      'handleSlimUx must serve text/html when the flag is enabled');
   });
 
   await test('settings.js renders Show experimental flags collapsible', () => {
