@@ -90,16 +90,26 @@
     }
     .icon-btn:hover { color: var(--text); background: var(--surface2); }
 
-    /* ── Layout grid: chatbox | history (right, full height); status under chatbox ── */
+    /* ── Layout grid: chatbox | history (right, full height); status under chatbox ──
+       Both columns are bounded so each panel frame hugs its content. History is
+       sized at 60% of the chat column (480 ≈ 0.6 × 800) for a balanced
+       two-column block. The grid as a whole is sized to its content
+       (width: fit-content) and horizontally centered (margin: 0 auto), so on
+       wide monitors empty space sits on both flanks instead of bloating either
+       panel. minmax(0, …) lets columns shrink proportionally on narrow
+       viewports without overflowing. */
     .layout {
       display: grid;
-      grid-template-columns: 1fr 320px;
+      grid-template-columns: minmax(0, 800px) minmax(0, 480px);
       grid-template-rows: 1fr 220px;
       grid-template-areas:
         "chat history"
         "status history";
       gap: 8px;
       padding: 8px;
+      width: fit-content;
+      max-width: 100%;
+      margin: 0 auto;
       height: calc(100vh - 44px);
     }
     .panel {
