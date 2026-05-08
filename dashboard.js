@@ -44,7 +44,7 @@ const { getAgents, getAgentDetail, getPrdInfo, getWorkItems, getDispatchQueue,
 // differ so tabs don't blur together. Detected once at startup: only git
 // checkouts have a .git next to dashboard.js; the npm-installed copy doesn't.
 const IS_DEV_MODE = fs.existsSync(path.join(MINIONS_DIR, '.git'));
-const FAVICON_EMOJI = IS_DEV_MODE ? '🚧' : '🔧';
+const FAVICON_EMOJI = IS_DEV_MODE ? '🚧' : '👽';
 const TITLE_SUFFIX = IS_DEV_MODE ? ' [DEV]' : '';
 
 // Startup size guard (#1167): fail fast with a clear error when dispatch.json /
