@@ -39,6 +39,14 @@ const { getAgents, getAgentDetail, getPrdInfo, getWorkItems, getDispatchQueue,
   getEngineLog, getMetrics, getKnowledgeBaseEntries, timeSince,
   MINIONS_DIR, AGENTS_DIR, ENGINE_DIR, INBOX_DIR, DISPATCH_PATH, PRD_DIR } = queries;
 
+// Dev vs binary differentiation. When two dashboards run side-by-side (npm
+// install on 7331, local checkout on 7332), the favicon and title need to
+// differ so tabs don't blur together. Detected once at startup: only git
+// checkouts have a .git next to dashboard.js; the npm-installed copy doesn't.
+const IS_DEV_MODE = fs.existsSync(path.join(MINIONS_DIR, '.git'));
+const FAVICON_EMOJI = IS_DEV_MODE ? '🚧' : '🔧';
+const TITLE_SUFFIX = IS_DEV_MODE ? ' [DEV]' : '';
+
 // Startup size guard (#1167): fail fast with a clear error when dispatch.json /
 // cooldowns.json have ballooned past ENGINE_DEFAULTS.maxStateFileBytes. Without
 // this, V8 silently OOMs on JSON.parse(~1 GB) and the operator has no hint as to
@@ -516,7 +524,9 @@ function buildDashboardHtml() {
   return layout
     .replace('/* __CSS__ */', () => css)
     .replace('<!-- __PAGES__ -->', () => pageHtml)
-    .replace('/* __JS__ */', () => `window.__MINIONS_HOME = ${JSON.stringify(os.homedir())};\n${featuresBootstrap}${jsHtml}`);
+    .replace('/* __JS__ */', () => `window.__MINIONS_HOME = ${JSON.stringify(os.homedir())};\n${featuresBootstrap}${jsHtml}`)
+    .replace(/\{\{favicon_emoji\}\}/g, FAVICON_EMOJI)
+    .replace(/\{\{title_suffix\}\}/g, TITLE_SUFFIX);
 }
 
 let HTML_RAW = buildDashboardHtml();
@@ -6636,7 +6646,9 @@ What would you like to discuss or change? When you're happy, say "approve" and I
   async function serveSlimUx(req, res) {
     try {
       const slimPath = path.join(MINIONS_DIR, 'dashboard', 'slim.html');
-      const html = fs.readFileSync(slimPath, 'utf8');
+      const html = fs.readFileSync(slimPath, 'utf8')
+        .replace(/\{\{favicon_emoji\}\}/g, FAVICON_EMOJI)
+        .replace(/\{\{title_suffix\}\}/g, TITLE_SUFFIX);
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
