@@ -139,6 +139,10 @@
     .panel-history { grid-area: history; }
 
     /* ── Chatbox ─────────────────────────────────────────────── */
+    /* Conversation column is centered with a comfortable reading width.
+       Both the message list and the input row share the same max-width so
+       the input never sits wider than the bubbles above it. On narrower
+       screens (< 800px panel) both fall back to 100% width naturally. */
     .chat-messages {
       flex: 1;
       overflow-y: auto;
@@ -147,6 +151,10 @@
       flex-direction: column;
       gap: 10px;
       min-height: 0;
+      width: 100%;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
     }
     .chat-empty {
       color: var(--muted);
@@ -195,6 +203,10 @@
       border-top: 1px solid var(--border);
       flex-shrink: 0;
       background: var(--surface);
+      width: 100%;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
     }
     .chat-input {
       flex: 1;
@@ -206,7 +218,9 @@
       font-size: 15px;
       font-family: inherit;
       resize: none;
-      min-height: 40px;
+      /* ≥ 2 lines visible by default. 15px font × 1.5 line-height = 22.5px/line,
+         × 2 = 45px content + 20px vertical padding + 2px border ≈ 68px. */
+      min-height: 68px;
       max-height: 140px;
     }
     .chat-input:focus { outline: none; border-color: var(--blue); }
@@ -387,7 +401,7 @@
       <textarea
         id="chat-input"
         class="chat-input"
-        rows="1"
+        rows="2"
         placeholder="Ask anything or give a command... (Enter to send, Shift+Enter for newline)"
       ></textarea>
       <button id="chat-stop" class="chat-stop" type="button" title="Stop the in-flight response">Stop</button>
