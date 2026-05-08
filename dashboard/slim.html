@@ -613,12 +613,12 @@
     var codeSlots = [];
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, _lang, code) {
       codeSlots.push('<pre><code>' + code + '</code></pre>');
-      return ' CB' + (codeSlots.length - 1) + ' ';
+      return '\u0000CB' + (codeSlots.length - 1) + '\u0000';
     });
     // Inline code.
     html = html.replace(/`([^`\n]+)`/g, function(_, code) {
       codeSlots.push('<code>' + code + '</code>');
-      return ' CB' + (codeSlots.length - 1) + ' ';
+      return '\u0000CB' + (codeSlots.length - 1) + '\u0000';
     });
     // Bold / italic.
     html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
@@ -629,7 +629,7 @@
       return '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>';
     });
     // Restore code slots.
-    html = html.replace(/ CB(\d+) /g, function(_, i) { return codeSlots[+i] || ''; });
+    html = html.replace(/\u0000CB(\d+)\u0000/g, function(_, i) { return codeSlots[+i] || ''; });
     return html;
   }
 

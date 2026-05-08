@@ -6640,6 +6640,18 @@ What would you like to discuss or change? When you're happy, say "approve" and I
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
+      // slim.html ships an inline <script> IIFE for the chatbox + settings dialog
+      // and a data: SVG favicon. Override the baseline strict CSP from
+      // buildSecurityHeaders() (which forbids inline scripts) the same way the
+      // full SPA route does — strict CSP still applies to all /api/* responses.
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self'"
+      );
       res.end(html);
     } catch (e) { return jsonReply(res, e.statusCode || 500, { error: e.message }); }
   }
