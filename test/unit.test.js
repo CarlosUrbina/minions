@@ -3743,9 +3743,17 @@ async function testFeatureFlags() {
     assert.strictEqual(entry.expired, true, 'past-dated expires should set expired=true');
   });
 
-  await test('module live registry stays empty (no test pollution leaked into FEATURES)', () => {
-    assert.deepStrictEqual(Object.keys(features.FEATURES), [],
-      'live FEATURES registry must remain empty — tests pass an explicit registry instead of mutating the module');
+  await test('module live registry has no test pollution (test-* keys must use explicit registry)', () => {
+    const polluted = Object.keys(features.FEATURES).filter(k => /^test[-_]/i.test(k));
+    assert.deepStrictEqual(polluted, [],
+      'tests must pass an explicit registry parameter, not mutate the module live FEATURES');
+    // Each legitimately-registered flag must carry a description and an explicit boolean default.
+    for (const [id, meta] of Object.entries(features.FEATURES)) {
+      assert.ok(meta && typeof meta.description === 'string' && meta.description.length > 0,
+        `feature "${id}" must have a non-empty description`);
+      assert.strictEqual(typeof meta.default, 'boolean',
+        `feature "${id}" must declare an explicit boolean default`);
+    }
   });
 
   await test('dashboard.js requires engine/features and wires /api/features routes', () => {
@@ -3797,6 +3805,62 @@ async function testFeatureFlags() {
       'handleFeaturesToggle must validate id against features.hasFeature');
     assert.ok(/jsonReply\(\s*res\s*,\s*404/.test(slice),
       'handleFeaturesToggle must reply 404 on unknown id');
+  });
+
+  await test("'slim-ux' feature flag is registered with disabled default", () => {
+    assert.ok(features.hasFeature('slim-ux'), "'slim-ux' must be registered in engine/features.js");
+    const meta = features.FEATURES['slim-ux'];
+    assert.strictEqual(meta.default, false, "'slim-ux' must default to disabled");
+    assert.ok(typeof meta.description === 'string' && meta.description.length > 0,
+      "'slim-ux' must have a non-empty description");
+    assert.strictEqual(features.isFeatureOn('slim-ux', {}), false,
+      "isFeatureOn('slim-ux') must be false when neither env nor config sets it");
+    assert.strictEqual(features.isFeatureOn('slim-ux', { features: { 'slim-ux': true } }), true,
+      'config.features["slim-ux"] = true must enable the flag');
+  });
+
+  await test("dashboard.js takes over '/' when 'slim-ux' flag is on; no /slim route", () => {
+    const dashSrc = fs.readFileSync(path.join(MINIONS_DIR, 'dashboard.js'), 'utf8');
+    // The previous /slim placeholder route was promoted to take over '/' —
+    // there should no longer be a dedicated /slim route registration, and
+    // the old handleSlimUx placeholder helper should be gone too.
+    assert.ok(!/path:\s*['"]\/slim['"]/.test(dashSrc),
+      "dashboard.js must NOT register a /slim route — slim UX takes over '/' instead");
+    assert.ok(!/async function handleSlimUx\b/.test(dashSrc),
+      'handleSlimUx (placeholder helper) must be removed in favor of serveSlimUx');
+    // The new helper reads dashboard/slim.html from disk and serves text/html.
+    const start = dashSrc.indexOf('async function serveSlimUx');
+    assert.ok(start >= 0, 'serveSlimUx must be defined as an async function');
+    const slice = dashSrc.slice(start, start + 1500);
+    assert.ok(/dashboard['"]\s*,\s*['"]slim\.html['"]/.test(slice) || /['"]slim\.html['"]/.test(slice),
+      'serveSlimUx must read dashboard/slim.html from disk');
+    assert.ok(/readFileSync/.test(slice),
+      'serveSlimUx must read the file fresh on each request (no in-memory cache)');
+    assert.ok(/text\/html/.test(slice),
+      'serveSlimUx must serve text/html');
+    // The catch-all serves slim.html only when path is '/' AND flag is on.
+    assert.ok(/pathname\s*===\s*['"]\/['"]\s*&&\s*features\.isFeatureOn\(\s*['"]slim-ux['"]/.test(dashSrc),
+      "dashboard.js must intercept pathname === '/' when isFeatureOn('slim-ux', ...) is true");
+    assert.ok(/return\s+serveSlimUx\(req,\s*res\)/.test(dashSrc),
+      'flag-on root path must dispatch to serveSlimUx(req, res)');
+  });
+
+  await test('dashboard/slim.html exists with the 3-panel slim UX layout', () => {
+    const slimPath = path.join(MINIONS_DIR, 'dashboard', 'slim.html');
+    assert.ok(fs.existsSync(slimPath), 'dashboard/slim.html must exist (slim UX HTML lives in a file, not in dashboard.js)');
+    const slim = fs.readFileSync(slimPath, 'utf8');
+    // Layout: top bar with settings button + three labelled panels.
+    assert.ok(/openSlimSettings\b/.test(slim) || /openSettings\b/.test(slim),
+      'slim.html must wire a settings button');
+    assert.ok(/Chatbox/i.test(slim), 'slim.html must label the Chatbox panel');
+    assert.ok(/History/.test(slim), 'slim.html must label the History panel');
+    assert.ok(/Status/.test(slim), 'slim.html must label the Status panel');
+    // Chatbox is wired to the existing CC stream endpoint.
+    assert.ok(/\/api\/command-center\/stream/.test(slim),
+      'slim.html chatbox must POST to /api/command-center/stream');
+    // Settings button uses the existing toggle endpoint so the flag can be flipped off without restart.
+    assert.ok(/\/api\/features\/toggle/.test(slim),
+      'slim.html settings dialog must reuse /api/features/toggle to flip flags');
   });
 
   await test('settings.js renders Show experimental flags collapsible', () => {

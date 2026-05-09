@@ -39,6 +39,14 @@ const { getAgents, getAgentDetail, getPrdInfo, getWorkItems, getDispatchQueue,
   getEngineLog, getMetrics, getKnowledgeBaseEntries, timeSince,
   MINIONS_DIR, AGENTS_DIR, ENGINE_DIR, INBOX_DIR, DISPATCH_PATH, PRD_DIR } = queries;
 
+// Dev vs binary differentiation. When two dashboards run side-by-side (npm
+// install on 7331, local checkout on 7332), the favicon and title need to
+// differ so tabs don't blur together. Detected once at startup: only git
+// checkouts have a .git next to dashboard.js; the npm-installed copy doesn't.
+const IS_DEV_MODE = fs.existsSync(path.join(MINIONS_DIR, '.git'));
+const FAVICON_EMOJI = IS_DEV_MODE ? '🚧' : '👽';
+const TITLE_SUFFIX = IS_DEV_MODE ? ' [DEV]' : '';
+
 // Startup size guard (#1167): fail fast with a clear error when dispatch.json /
 // cooldowns.json have ballooned past ENGINE_DEFAULTS.maxStateFileBytes. Without
 // this, V8 silently OOMs on JSON.parse(~1 GB) and the operator has no hint as to
@@ -516,7 +524,9 @@ function buildDashboardHtml() {
   return layout
     .replace('/* __CSS__ */', () => css)
     .replace('<!-- __PAGES__ -->', () => pageHtml)
-    .replace('/* __JS__ */', () => `window.__MINIONS_HOME = ${JSON.stringify(os.homedir())};\n${featuresBootstrap}${jsHtml}`);
+    .replace('/* __JS__ */', () => `window.__MINIONS_HOME = ${JSON.stringify(os.homedir())};\n${featuresBootstrap}${jsHtml}`)
+    .replace(/\{\{favicon_emoji\}\}/g, FAVICON_EMOJI)
+    .replace(/\{\{title_suffix\}\}/g, TITLE_SUFFIX);
 }
 
 let HTML_RAW = buildDashboardHtml();
@@ -6626,6 +6636,38 @@ What would you like to discuss or change? When you're happy, say "approve" and I
     } catch (e) { return jsonReply(res, e.statusCode || 500, { error: e.message }); }
   }
 
+  // Slim UX surface for the experimental redesigned dashboard.
+  // The HTML lives in dashboard/slim.html so the human can iterate on the
+  // markup directly — we read the file from disk on each request (no in-
+  // memory cache) so editing it and refreshing the browser shows the change
+  // without a server restart. Gating happens in the request dispatcher: this
+  // helper is only invoked when features.isFeatureOn('slim-ux', CONFIG) is
+  // true at request time, so the flag toggle takes effect with no restart.
+  async function serveSlimUx(req, res) {
+    try {
+      const slimPath = path.join(MINIONS_DIR, 'dashboard', 'slim.html');
+      const html = fs.readFileSync(slimPath, 'utf8')
+        .replace(/\{\{favicon_emoji\}\}/g, FAVICON_EMOJI)
+        .replace(/\{\{title_suffix\}\}/g, TITLE_SUFFIX);
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      // slim.html ships an inline <script> IIFE for the chatbox + settings dialog
+      // and a data: SVG favicon. Override the baseline strict CSP from
+      // buildSecurityHeaders() (which forbids inline scripts) the same way the
+      // full SPA route does — strict CSP still applies to all /api/* responses.
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self'"
+      );
+      res.end(html);
+    } catch (e) { return jsonReply(res, e.statusCode || 500, { error: e.message }); }
+  }
+
   async function handleHealth(req, res) {
     const engine = getEngineState();
     const agents = getAgents();
@@ -7455,6 +7497,14 @@ What would you like to discuss or change? When you're happy, say "approve" and I
       }
       return _result;
     }
+  }
+
+  // Slim UX takeover — when the 'slim-ux' feature flag is on, the root
+  // dashboard route serves dashboard/slim.html instead of the full SPA.
+  // Checked at request time so /api/features/toggle flips behavior with
+  // no restart; flag-off means zero behavior change for the catch-all.
+  if (pathname === '/' && features.isFeatureOn('slim-ux', CONFIG)) {
+    return serveSlimUx(req, res);
   }
 
   // Serve dashboard HTML with gzip + caching

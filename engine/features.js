@@ -4,8 +4,12 @@
 
 // Entry shape: id → { description, default: bool, addedIn?: version, expires?: ISO-date }
 const FEATURES = {
-  // Example:
-  // 'ux-sidebar-v2': { description: '…', default: false, addedIn: '0.1.1738', expires: '2026-06-01' },
+  'slim-ux': {
+    description: 'Experimental redesigned dashboard surface (placeholder gate; Slim UX)',
+    default: false,
+    addedIn: '0.1.1757',
+    expires: '2026-11-01',
+  },
 };
 
 const ENV_TRUTHY = new Set(['1', 'true', 'on', 'yes']);

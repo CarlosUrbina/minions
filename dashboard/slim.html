@@ -1,0 +1,1627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Minions — Slim UX{{title_suffix}}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>{{favicon_emoji}}</text></svg>">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* ---------------------------------------------------------------
+       Slim UX prototype — gated by the 'slim-ux' feature flag.
+       Plain HTML/CSS/vanilla JS so the human can edit this file
+       directly. The dashboard reads this from disk on each request,
+       so a page refresh shows the latest edit (no server restart).
+
+       Round-3 layout (W-moxkqfaw): three sections instead of two
+       panels — ACTIONS / STATUS / HISTORY. See
+       docs/slim-ux/concepts.md for the language we're standardizing
+       around, and architecture-suggestions.md for the data-shape
+       changes that would make this UX cheaper to maintain.
+       --------------------------------------------------------------- */
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2128;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --blue: #58a6ff;
+      --green: #3fb950;
+      --amber: #d29922;
+      --red: #f85149;
+      --radius: 6px;
+    }
+
+    * { box-sizing: border-box; }
+
+    /* Typography baseline (slim UX foundation phase).
+       Existing dashboard uses 'Segoe UI' / 14px on body — see styles.css.
+       Round-2 bumped to 15px; round-3 bumps once more to 16px because the
+       human flagged the slim as still feeling cramped. The scale below is
+       proportional to 16px (h1 22, h2 18, label 11). The existing
+       dashboard stays untouched. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      width: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    /* ── Top bar ──────────────────────────────────────────────── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      height: 46px;
+      flex-shrink: 0;
+    }
+    .topbar-title {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--text);
+      letter-spacing: 0.3px;
+    }
+    .topbar-title .badge {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: var(--blue);
+      border: 1px solid var(--blue);
+      border-radius: 3px;
+      vertical-align: 2px;
+    }
+    .topbar-actions { display: flex; align-items: center; gap: 8px; }
+    .icon-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1;
+      padding: 6px 10px;
+      border-radius: var(--radius);
+    }
+    .icon-btn:hover { color: var(--text); background: var(--surface2); }
+
+    /* ── Layout grid ──────────────────────────────────────────────
+       Left column: ACTIONS (chat + action buttons) — visually dominant.
+       Right column: STATUS on top, HISTORY underneath.
+       The whole grid is sized to its content (`fit-content`) and centered
+       on wide monitors. minmax(0, …) keeps columns from overflowing on
+       narrow viewports. */
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 820px) minmax(0, 460px);
+      grid-template-rows: 1fr 1fr;
+      grid-template-areas:
+        "actions status"
+        "actions history";
+      gap: 10px;
+      padding: 10px;
+      width: fit-content;
+      max-width: 100%;
+      margin: 0 auto;
+      height: calc(100vh - 46px);
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 9px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.7px;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-header .panel-sub {
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 400;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      min-height: 0;
+    }
+    .panel-placeholder {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 14px;
+    }
+
+    .panel-actions { grid-area: actions; }
+    .panel-status  { grid-area: status; }
+    .panel-history { grid-area: history; }
+
+    /* ── Actions panel: chat + action buttons ───────────────────── */
+    /* The chat fills the panel above the action button row. Same IDs and
+       class names as the previous slim chatbox so the IIFE wiring below
+       continues to work without changes. */
+    .actions-chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+      width: 100%;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .chat-empty {
+      color: var(--muted);
+      font-size: 14px;
+      font-style: italic;
+      text-align: center;
+      margin-top: 24px;
+    }
+    .chat-msg {
+      max-width: 90%;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-size: 16px;
+    }
+    .chat-msg.user {
+      align-self: flex-end;
+      background: var(--blue);
+      color: #fff;
+    }
+    .chat-msg.assistant {
+      align-self: flex-start;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .chat-msg.system {
+      align-self: center;
+      background: transparent;
+      color: var(--muted);
+      font-size: 13px;
+      font-style: italic;
+    }
+    .chat-msg.error {
+      align-self: flex-start;
+      background: rgba(248, 81, 73, 0.1);
+      color: var(--red);
+      border: 1px solid var(--red);
+      font-size: 14px;
+    }
+    .chat-input-wrap {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      background: var(--surface);
+      width: 100%;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .chat-input {
+      flex: 1;
+      padding: 10px 12px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 16px;
+      font-family: inherit;
+      resize: none;
+      /* >= 2 lines visible by default. 16px font * 1.5 line-height = 24px/line,
+         x 2 = 48px content + 20px vertical padding + 2px border ~= 70px. */
+      min-height: 70px;
+      max-height: 150px;
+    }
+    .chat-input:focus { outline: none; border-color: var(--blue); }
+    .chat-send {
+      padding: 10px 18px;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      align-self: flex-end;
+    }
+    .chat-send:hover { filter: brightness(1.1); }
+    .chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+    .chat-stop {
+      padding: 10px 14px;
+      background: var(--surface2);
+      color: var(--red);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      cursor: pointer;
+      align-self: flex-end;
+      display: none;
+    }
+    .chat-stop:hover { filter: brightness(1.1); }
+
+    /* Tool-call progress lines + thinking indicator (unchanged from r2) */
+    .chat-tools {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 4px;
+    }
+    .chat-tool {
+      color: var(--muted);
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-tool::before { content: "● "; }
+
+    .chat-thinking {
+      color: var(--muted);
+      font-size: 13px;
+      font-style: italic;
+    }
+    .chat-thinking-dots {
+      display: inline-flex;
+      gap: 3px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .chat-thinking-dots > span {
+      width: 4px;
+      height: 4px;
+      background: var(--blue);
+      border-radius: 50%;
+      animation: dotPulse 1.2s infinite;
+    }
+    .chat-thinking-dots > span:nth-child(2) { animation-delay: 0.2s; }
+    .chat-thinking-dots > span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dotPulse {
+      0%, 80%, 100% { opacity: 0.3; }
+      40%           { opacity: 1; }
+    }
+
+    .chat-action {
+      align-self: flex-start;
+      padding: 5px 11px;
+      border-radius: 4px;
+      font-size: 12px;
+      border: 1px dashed var(--border);
+      color: var(--muted);
+    }
+    .chat-action.ok    { color: var(--green); }
+    .chat-action.warn  { color: var(--amber); }
+    .chat-action.err   { color: var(--red); }
+
+    /* Lightweight markdown styling inside assistant bubbles. */
+    .chat-msg.assistant code,
+    .chat-msg.assistant pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .chat-msg.assistant code {
+      background: var(--bg);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    .chat-msg.assistant pre {
+      background: var(--bg);
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 14px;
+      margin: 6px 0;
+    }
+    .chat-msg.assistant pre code { background: none; padding: 0; }
+    .chat-msg.assistant a { color: var(--blue); }
+    .chat-msg.assistant strong { color: var(--text); }
+
+    /* ── Action buttons row ─────────────────────────────────────── */
+    /* Row of four large buttons that map to the human's "concept
+       collapses": Work (Work Items + Pipelines), Plans (Plans + PRD),
+       Knowledge (Notes + KB + Pinned Context), Triggers (Schedule +
+       Watch). TEMP names — the human said the data model split should
+       NOT change in round 1, so this is a UX-only rename layer. */
+    .actions-buttons {
+      flex-shrink: 0;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 10px 12px 12px;
+      border-top: 1px solid var(--border);
+      width: 100%;
+      max-width: 800px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .action-btn {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      text-align: center;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .action-btn:hover {
+      border-color: var(--blue);
+      background: var(--surface);
+    }
+    .action-btn .action-btn-icon { font-size: 16px; }
+    .action-btn .action-btn-label { font-weight: 600; }
+    .action-btn .action-btn-sub { font-size: 10px; color: var(--muted); }
+
+    /* ── Status panel: cockpit tiles ─────────────────────────────
+       Tiles light up when their value is non-zero or their state is
+       'active'. Dim grey otherwise. The whole panel polls /api/status
+       every 5s.
+
+       Tile state classes drive the colored dot + glow. Adding a new
+       indicator: append a tile DOM node + a key in the COCKPIT_TILES
+       table inside the IIFE. */
+    .cockpit-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .cockpit-tile {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .cockpit-tile.lit-blue {
+      border-color: rgba(88, 166, 255, 0.6);
+      background: rgba(88, 166, 255, 0.06);
+    }
+    .cockpit-tile.lit-green {
+      border-color: rgba(63, 185, 80, 0.6);
+      background: rgba(63, 185, 80, 0.06);
+    }
+    .cockpit-tile.lit-amber {
+      border-color: rgba(210, 153, 34, 0.6);
+      background: rgba(210, 153, 34, 0.06);
+    }
+    .cockpit-tile.lit-red {
+      border-color: rgba(248, 81, 73, 0.6);
+      background: rgba(248, 81, 73, 0.08);
+    }
+    .cockpit-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cockpit-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    .lit-blue  .cockpit-dot { background: var(--blue);  box-shadow: 0 0 6px var(--blue); }
+    .lit-green .cockpit-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .lit-amber .cockpit-dot { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+    .lit-red   .cockpit-dot { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+    .cockpit-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1;
+    }
+    .cockpit-value.dim { color: var(--muted); }
+    .cockpit-detail {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.3;
+      min-height: 14px;
+    }
+
+    /* ── History panel: event log ─────────────────────────────── */
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .history-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .history-item.kind-completion { border-left: 3px solid var(--green); }
+    .history-item.kind-dispatch   { border-left: 3px solid var(--blue); }
+    .history-item.kind-pr         { border-left: 3px solid var(--amber); }
+    .history-item.kind-failure    { border-left: 3px solid var(--red); }
+    .history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .history-kind {
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .history-time {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .history-title {
+      font-size: 13px;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .history-meta {
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-word;
+    }
+    .history-meta a { color: var(--blue); }
+    .history-empty {
+      color: var(--muted);
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    /* ── Modals (settings + action prompt) ──────────────────── */
+    .modal-bg {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 480px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 64px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-header h3 { margin: 0; font-size: 16px; color: var(--blue); }
+    .modal-body { padding: 14px 18px; overflow-y: auto; }
+    .modal-body p { color: var(--muted); margin: 4px 0 12px; font-size: 13px; }
+    .modal-footer {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .btn-primary {
+      padding: 8px 16px;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .btn-secondary {
+      padding: 8px 16px;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn-primary:hover, .btn-secondary:hover { filter: brightness(1.1); }
+
+    .flag-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .flag-row:last-child { border-bottom: none; }
+    .flag-name { font-size: 14px; font-weight: 600; }
+    .flag-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .flag-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .flag-toggle input { cursor: pointer; }
+    .settings-link {
+      display: block;
+      margin-top: 14px;
+      padding: 10px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--blue);
+      text-decoration: none;
+      font-size: 13px;
+      text-align: center;
+    }
+    .settings-link:hover { filter: brightness(1.1); }
+
+    .modal-textarea {
+      width: 100%;
+      min-height: 96px;
+      padding: 10px 12px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-family: inherit;
+      resize: vertical;
+    }
+    .modal-textarea:focus { outline: none; border-color: var(--blue); }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-title">Minions <span class="badge">SLIM UX</span></div>
+  <div class="topbar-actions">
+    <!-- Buttons get their click handlers wired via addEventListener inside the
+         IIFE below. Inline `onclick=` was brittle: it depended on the IIFE
+         exporting handlers to window, which a single mid-IIFE error could
+         silently break (handler attaches before crash, button still renders,
+         click fires but no global handler). addEventListener attaches inside
+         the same scope and is observable in DevTools when wiring fails. -->
+    <button id="slim-new-chat-btn" class="icon-btn" title="New chat (clears session)">&#x270E;</button>
+    <button id="slim-settings-btn" class="icon-btn" title="Settings">&#9881;</button>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- ACTIONS — chat + 4 concept-collapse buttons.
+       Visually dominant; this is what the human said was buried in the full
+       dashboard ("Command Center is not prominent enough"). -->
+  <div class="panel panel-actions">
+    <div class="panel-header">
+      Actions
+      <span class="panel-sub">Command Center &amp; quick triggers</span>
+    </div>
+    <div class="actions-chat">
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-empty">No messages yet — say hi to Command Center.</div>
+      </div>
+      <div class="chat-input-wrap">
+        <textarea
+          id="chat-input"
+          class="chat-input"
+          rows="2"
+          placeholder="Ask anything or give a command... (Enter to send, Shift+Enter for newline)"
+        ></textarea>
+        <button id="chat-stop" class="chat-stop" type="button" title="Stop the in-flight response">Stop</button>
+        <button id="chat-send" class="chat-send" type="button">Send</button>
+      </div>
+    </div>
+    <!-- TEMP: button labels are concept-collapse names. The data model is
+         unchanged — Work Items + Pipelines are still separate, etc. Each
+         button opens a small modal with a textarea; on submit we drop the
+         text into the chat input prefixed with the right intent and let CC
+         do the dispatch. Wiring direct API calls is a round-2 task. -->
+    <div class="actions-buttons">
+      <button class="action-btn" data-action-prompt="work" type="button">
+        <span class="action-btn-icon">&#x2795;</span>
+        <span class="action-btn-label">Work</span>
+        <span class="action-btn-sub">item or pipeline</span>
+      </button>
+      <button class="action-btn" data-action-prompt="plan" type="button">
+        <span class="action-btn-icon">&#x1F5D2;&#xFE0F;</span>
+        <span class="action-btn-label">Plan</span>
+        <span class="action-btn-sub">plan / PRD</span>
+      </button>
+      <button class="action-btn" data-action-prompt="knowledge" type="button">
+        <span class="action-btn-icon">&#x1F4DA;</span>
+        <span class="action-btn-label">Knowledge</span>
+        <span class="action-btn-sub">note / KB / pin</span>
+      </button>
+      <button class="action-btn" data-action-prompt="trigger" type="button">
+        <span class="action-btn-icon">&#x23F0;</span>
+        <span class="action-btn-label">Trigger</span>
+        <span class="action-btn-sub">schedule / watch</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- STATUS — cockpit tiles. Lit when their indicator is non-zero. -->
+  <div class="panel panel-status">
+    <div class="panel-header">
+      Status
+      <span class="panel-sub" id="cockpit-stamp">refreshing&hellip;</span>
+    </div>
+    <div class="panel-body">
+      <div class="cockpit-grid" id="cockpit-grid">
+        <div class="cockpit-tile" data-tile="engine">
+          <div class="cockpit-label"><span class="cockpit-dot"></span> Engine</div>
+          <div class="cockpit-value dim">—</div>
+          <div class="cockpit-detail">checking&hellip;</div>
+        </div>
+        <div class="cockpit-tile" data-tile="dispatches">
+          <div class="cockpit-label"><span class="cockpit-dot"></span> Active dispatches</div>
+          <div class="cockpit-value dim">0</div>
+          <div class="cockpit-detail">none in flight</div>
+        </div>
+        <div class="cockpit-tile" data-tile="minions">
+          <div class="cockpit-label"><span class="cockpit-dot"></span> Minions working</div>
+          <div class="cockpit-value dim">0</div>
+          <div class="cockpit-detail">all idle</div>
+        </div>
+        <div class="cockpit-tile" data-tile="queued">
+          <div class="cockpit-label"><span class="cockpit-dot"></span> Queued work</div>
+          <div class="cockpit-value dim">0</div>
+          <div class="cockpit-detail">queue empty</div>
+        </div>
+        <div class="cockpit-tile" data-tile="prs">
+          <div class="cockpit-label"><span class="cockpit-dot"></span> Active PRs</div>
+          <div class="cockpit-value dim">0</div>
+          <div class="cockpit-detail">no open PRs</div>
+        </div>
+        <div class="cockpit-tile" data-tile="watches">
+          <div class="cockpit-label"><span class="cockpit-dot"></span> Watches</div>
+          <div class="cockpit-value dim">0</div>
+          <div class="cockpit-detail">no watches set</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY — chronological event log. Newest at top.
+       Round 1 sources: dispatch.completed (last 10), dispatch.active
+       (currently working), engineLog. -->
+  <div class="panel panel-history">
+    <div class="panel-header">
+      History
+      <span class="panel-sub" id="history-stamp">&hellip;</span>
+    </div>
+    <div class="panel-body">
+      <div class="history-list" id="history-list">
+        <div class="history-empty">Loading recent activity&hellip;</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings dialog (preserved from r2): lists experimental flags so the
+     user can flip 'slim-ux' off and revert to the original dashboard. -->
+<div class="modal-bg" id="slim-settings-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Settings &middot; Experimental flags</h3>
+      <button id="slim-settings-close" class="icon-btn" title="Close">&times;</button>
+    </div>
+    <div class="modal-body" id="slim-settings-body">
+      <p>Loading flags&hellip;</p>
+    </div>
+  </div>
+</div>
+
+<!-- Generic action prompt modal — used by the four Action buttons.
+     TEMP: routes through the chat input rather than calling /api/work-items
+     etc. directly. CC parses "create a work item: …" into an actions block
+     and dispatches it. Round-2 will replace this with direct API calls. -->
+<div class="modal-bg" id="slim-action-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="slim-action-title">Action</h3>
+      <button id="slim-action-close" class="icon-btn" title="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="slim-action-desc"></p>
+      <textarea id="slim-action-input" class="modal-textarea" placeholder=""></textarea>
+    </div>
+    <div class="modal-footer">
+      <button id="slim-action-cancel" class="btn-secondary" type="button">Cancel</button>
+      <button id="slim-action-submit" class="btn-primary" type="button">Send to Command Center</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ── Helpers ────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function relTime(iso) {
+    if (!iso) return '';
+    var t = typeof iso === 'number' ? iso : Date.parse(iso);
+    if (isNaN(t)) return '';
+    var s = Math.floor((Date.now() - t) / 1000);
+    if (s < 0) s = 0;
+    if (s < 60) return s + 's ago';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ago';
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + 'h ago';
+    var d = Math.floor(h / 24);
+    return d + 'd ago';
+  }
+
+  // ── Settings dialog ────────────────────────────────────────────
+  async function openSlimSettings() {
+    var modal = document.getElementById('slim-settings-modal');
+    var body = document.getElementById('slim-settings-body');
+    body.innerHTML = '<p>Loading flags&hellip;</p>';
+    modal.classList.add('open');
+    try {
+      var res = await fetch('/api/features');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      var flags = (data && data.features) || [];
+      var rows = flags.length === 0
+        ? '<p>No experimental flags registered. Add entries to <code>engine/features.js</code>.</p>'
+        : flags.map(function(f) {
+            return (
+              '<div class="flag-row">' +
+                '<div>' +
+                  '<div class="flag-name">' + escHtml(f.id) + '</div>' +
+                  '<div class="flag-desc">' + escHtml(f.description || '') + '</div>' +
+                '</div>' +
+                '<label class="flag-toggle">' +
+                  '<input type="checkbox" data-flag="' + escHtml(f.id) + '"' +
+                    (f.enabled ? ' checked' : '') + '>' +
+                  '<span>' + (f.enabled ? 'On' : 'Off') + '</span>' +
+                '</label>' +
+              '</div>'
+            );
+          }).join('');
+      body.innerHTML =
+        '<p>Toggle <code>slim-ux</code> off to return to the original dashboard. ' +
+        'Advanced settings (agents, projects, runtime) live there for now.</p>' +
+        rows +
+        // TEMP: deep-link to the full dashboard's settings page. The slim
+        // intentionally doesn't reimplement that whole UI — Carlos asked us
+        // to keep settings sprawl off the main slim view.
+        '<a class="settings-link" href="/?fullDashboard=1" title="Open the full dashboard’s settings page">' +
+        'Advanced settings &rarr; full dashboard' +
+        '</a>';
+      var inputs = body.querySelectorAll('input[type=checkbox][data-flag]');
+      for (var i = 0; i < inputs.length; i++) {
+        inputs[i].addEventListener('change', onFlagToggle);
+      }
+    } catch (e) {
+      body.innerHTML = '<p style="color:var(--red)">Failed to load flags: ' + escHtml(e.message) + '</p>';
+    }
+  }
+
+  function closeSlimSettings() {
+    document.getElementById('slim-settings-modal').classList.remove('open');
+  }
+
+  (function bindSettingsUi() {
+    var btn = document.getElementById('slim-settings-btn');
+    var closeBtn = document.getElementById('slim-settings-close');
+    var backdrop = document.getElementById('slim-settings-modal');
+    if (btn) btn.addEventListener('click', openSlimSettings);
+    if (closeBtn) closeBtn.addEventListener('click', closeSlimSettings);
+    if (backdrop) {
+      backdrop.addEventListener('click', function(ev) {
+        if (ev.target === backdrop) closeSlimSettings();
+      });
+    }
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key !== 'Escape') return;
+      if (backdrop && backdrop.classList.contains('open')) closeSlimSettings();
+      var actionModal = document.getElementById('slim-action-modal');
+      if (actionModal && actionModal.classList.contains('open')) closeActionModal();
+    });
+  })();
+
+  async function onFlagToggle(ev) {
+    var input = ev.currentTarget;
+    var id = input.getAttribute('data-flag');
+    var enabled = input.checked;
+    var label = input.parentElement.querySelector('span');
+    if (label) label.textContent = enabled ? 'On' : 'Off';
+    try {
+      var res = await fetch('/api/features/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: id, enabled: enabled }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (id === 'slim-ux' && !enabled) {
+        location.reload();
+      }
+    } catch (e) {
+      input.checked = !enabled;
+      if (label) label.textContent = !enabled ? 'On' : 'Off';
+      alert('Toggle failed: ' + e.message);
+    }
+  }
+
+  // ── Action prompt modal (TEMP: routes through chat) ──────────────
+  // Each of the 4 action buttons opens this modal with prompt text
+  // tailored to the concept. On submit we drop the user's text into the
+  // chat input prefixed with intent text and submit it through the
+  // existing CC stream pipeline. Direct /api/work-items style wiring is a
+  // round-2 task — we want CC's natural-language handling for round 1
+  // because it's already working end to end.
+  var ACTION_PROMPTS = {
+    work: {
+      title: 'New work',
+      desc: 'Describe a work item to dispatch (or a pipeline to define). Command Center will pick the right type and assignee.',
+      placeholder: 'e.g. Fix the dashboard typo on the Plans page; high priority',
+      prefix: 'Create a work item: ',
+    },
+    plan: {
+      title: 'New plan',
+      desc: 'Describe what should be planned. CC will draft the plan markdown for human review before it materializes.',
+      placeholder: 'e.g. Plan: redesign the Settings sidebar in three small steps',
+      prefix: 'Draft a plan for: ',
+    },
+    knowledge: {
+      title: 'Add knowledge',
+      desc: 'Capture a note for the team. CC will route it to the inbox; consolidation will classify it into KB.',
+      placeholder: 'e.g. Note: when ADO returns 401, refresh the broker token before retrying',
+      prefix: 'Add a team note: ',
+    },
+    trigger: {
+      title: 'New trigger',
+      desc: 'Describe a recurring trigger or a watch. CC will pick schedule (cron) vs watch (event-based) for you.',
+      placeholder: 'e.g. Run the test suite every weekday at 8am',
+      prefix: 'Create a trigger: ',
+    },
+  };
+
+  var _activeActionKey = null;
+  function openActionModal(key) {
+    var def = ACTION_PROMPTS[key];
+    if (!def) return;
+    _activeActionKey = key;
+    document.getElementById('slim-action-title').textContent = def.title;
+    document.getElementById('slim-action-desc').textContent = def.desc;
+    var input = document.getElementById('slim-action-input');
+    input.value = '';
+    input.placeholder = def.placeholder;
+    document.getElementById('slim-action-modal').classList.add('open');
+    setTimeout(function() { input.focus(); }, 30);
+  }
+  function closeActionModal() {
+    _activeActionKey = null;
+    document.getElementById('slim-action-modal').classList.remove('open');
+  }
+  function submitActionModal() {
+    var def = ACTION_PROMPTS[_activeActionKey];
+    if (!def) return closeActionModal();
+    var text = (document.getElementById('slim-action-input').value || '').trim();
+    if (!text) return closeActionModal();
+    var msg = def.prefix + text;
+    closeActionModal();
+    // Feed it through the same chat pipeline. Set the textarea, focus,
+    // dispatch — CC will turn this into an actions block.
+    var ta = document.getElementById('chat-input');
+    ta.value = msg;
+    ta.focus();
+    sendMessage();
+  }
+  (function bindActionModalUi() {
+    var buttons = document.querySelectorAll('.action-btn[data-action-prompt]');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function(ev) {
+        var key = ev.currentTarget.getAttribute('data-action-prompt');
+        openActionModal(key);
+      });
+    }
+    document.getElementById('slim-action-close').addEventListener('click', closeActionModal);
+    document.getElementById('slim-action-cancel').addEventListener('click', closeActionModal);
+    document.getElementById('slim-action-submit').addEventListener('click', submitActionModal);
+    var backdrop = document.getElementById('slim-action-modal');
+    backdrop.addEventListener('click', function(ev) {
+      if (ev.target === backdrop) closeActionModal();
+    });
+  })();
+
+  // ── Chatbox wired to /api/command-center/stream ──────────────
+  // Mirrors the full dashboard's command center: SSE streaming, tool-call
+  // progress, abort, and per-tab session continuity.
+  var SLIM_STORAGE_KEY = 'slim-cc-state-v1';
+  var SLIM_TAB_KEY     = 'slim-cc-tabid-v1';
+  var SLIM_MAX_MESSAGES = 30;
+  var STREAM_TIMEOUT_MS = (60 * 60 * 1000) + 60000;
+
+  var sessionId = null;
+  var messages = [];
+  var sending = false;
+  var abortController = null;
+
+  var tabId = (function() {
+    try {
+      var t = sessionStorage.getItem(SLIM_TAB_KEY);
+      if (t) return t;
+      t = 'slim-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      sessionStorage.setItem(SLIM_TAB_KEY, t);
+      return t;
+    } catch (_e) {
+      return 'slim-' + Date.now().toString(36);
+    }
+  })();
+
+  var msgsEl  = document.getElementById('chat-messages');
+  var inputEl = document.getElementById('chat-input');
+  var sendBtn = document.getElementById('chat-send');
+  var stopBtn = document.getElementById('chat-stop');
+
+  function loadState() {
+    try {
+      var raw = localStorage.getItem(SLIM_STORAGE_KEY);
+      if (!raw) return;
+      var data = JSON.parse(raw) || {};
+      sessionId = data.sessionId || null;
+      messages = Array.isArray(data.messages) ? data.messages.slice(-SLIM_MAX_MESSAGES) : [];
+    } catch (_e) { /* ignore */ }
+  }
+  var saveDebounce = null;
+  function saveState() {
+    if (saveDebounce) return;
+    saveDebounce = setTimeout(function() {
+      saveDebounce = null;
+      try {
+        localStorage.setItem(SLIM_STORAGE_KEY, JSON.stringify({
+          sessionId: sessionId,
+          messages: messages.slice(-SLIM_MAX_MESSAGES),
+        }));
+      } catch (_e) { /* localStorage full */ }
+    }, 300);
+  }
+
+  function escHtmlChat(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function renderMarkdown(text) {
+    if (!text) return '';
+    var html = escHtmlChat(text);
+    var codeSlots = [];
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, _lang, code) {
+      codeSlots.push('<pre><code>' + code + '</code></pre>');
+      return '\u0001CB' + (codeSlots.length - 1) + '\u0001';
+    });
+    html = html.replace(/`([^`\n]+)`/g, function(_, code) {
+      codeSlots.push('<code>' + code + '</code>');
+      return '\u0001CB' + (codeSlots.length - 1) + '\u0001';
+    });
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
+    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function(_, label, href) {
+      if (!/^(https?:|mailto:|\/)/i.test(href)) return label;
+      return '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>';
+    });
+    html = html.replace(/\u0001CB(\d+)\u0001/g, function(_, i) { return codeSlots[+i] || ''; });
+    return html;
+  }
+
+  function clearEmpty() {
+    var empty = msgsEl.querySelector('.chat-empty');
+    if (empty) empty.remove();
+  }
+  function scrollToBottom() {
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+  function appendBubble(role, text) {
+    clearEmpty();
+    var div = document.createElement('div');
+    div.className = 'chat-msg ' + role;
+    if (role === 'assistant') div.innerHTML = renderMarkdown(text);
+    else div.textContent = text;
+    msgsEl.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+  function appendActionStatus(severity, label) {
+    var div = document.createElement('div');
+    div.className = 'chat-action ' + (severity || '');
+    div.textContent = label;
+    msgsEl.appendChild(div);
+    scrollToBottom();
+    return div;
+  }
+
+  function formatToolSummary(name, input) {
+    var inp = input || {};
+    switch (name) {
+      case 'Bash': {
+        var cmd = String(inp.command || '');
+        if (cmd.length > 80) cmd = cmd.slice(0, 77) + '...';
+        return '$ ' + cmd;
+      }
+      case 'Read':  return 'Reading ' + (inp.file_path || '');
+      case 'Edit':  return 'Editing ' + (inp.file_path || '');
+      case 'Write': return 'Writing ' + (inp.file_path || '');
+      case 'Grep':  return 'Searching `' + (inp.pattern || '') + '` in ' + (inp.path || '.');
+      case 'Glob':  return 'Glob ' + (inp.pattern || '');
+      case 'WebFetch':  return 'Fetch ' + (inp.url || '');
+      case 'WebSearch': return 'Search "' + (inp.query || '') + '"';
+      case 'TodoWrite': {
+        var items = Array.isArray(inp.todos) ? inp.todos : [];
+        return 'Update todos (' + items.length + ' items)';
+      }
+      default: {
+        var keys = Object.keys(inp);
+        if (keys.length === 0) return name + '()';
+        var v = String(inp[keys[0]] || '');
+        if (v.length > 40) v = v.slice(0, 37) + '...';
+        return name + '(' + keys[0] + ': ' + v + ')';
+      }
+    }
+  }
+
+  function buildStreamBubble() {
+    clearEmpty();
+    var div = document.createElement('div');
+    div.className = 'chat-msg assistant streaming';
+
+    var tools = document.createElement('div');
+    tools.className = 'chat-tools';
+    div.appendChild(tools);
+
+    var body = document.createElement('div');
+    body.className = 'chat-body';
+    div.appendChild(body);
+
+    var thinking = document.createElement('div');
+    thinking.className = 'chat-thinking';
+    thinking.innerHTML = 'Thinking<span class="chat-thinking-dots"><span></span><span></span><span></span></span>';
+    div.appendChild(thinking);
+
+    msgsEl.appendChild(div);
+    scrollToBottom();
+
+    return {
+      root: div,
+      tools: tools,
+      body: body,
+      thinking: thinking,
+      addTool: function(name, input) {
+        var line = document.createElement('div');
+        line.className = 'chat-tool';
+        line.textContent = formatToolSummary(name, input);
+        tools.appendChild(line);
+        scrollToBottom();
+      },
+      setText: function(text) {
+        body.innerHTML = renderMarkdown(text || '');
+        scrollToBottom();
+      },
+      removeThinking: function() {
+        if (thinking && thinking.parentNode) thinking.parentNode.removeChild(thinking);
+      },
+      finalize: function(text) {
+        if (thinking && thinking.parentNode) thinking.parentNode.removeChild(thinking);
+        body.innerHTML = renderMarkdown(text || '');
+        div.classList.remove('streaming');
+        scrollToBottom();
+      },
+      replaceWithError: function(message) {
+        if (thinking && thinking.parentNode) thinking.parentNode.removeChild(thinking);
+        div.className = 'chat-msg error';
+        div.innerHTML = '';
+        div.textContent = message;
+        scrollToBottom();
+      },
+    };
+  }
+
+  function setSending(on) {
+    sending = on;
+    sendBtn.disabled = on;
+    sendBtn.textContent = on ? 'Sending…' : 'Send';
+    stopBtn.style.display = on ? 'block' : 'none';
+    inputEl.disabled = on;
+  }
+
+  function rerenderHistory() {
+    msgsEl.innerHTML = '';
+    if (!messages.length) {
+      var empty = document.createElement('div');
+      empty.className = 'chat-empty';
+      empty.textContent = 'No messages yet — say hi to Command Center.';
+      msgsEl.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i];
+      if (m.role === 'action') appendActionStatus(m.severity || '', m.text || '');
+      else appendBubble(m.role, m.text || '');
+    }
+  }
+  loadState();
+  rerenderHistory();
+
+  function describeAction(action) {
+    if (!action || !action.type) return 'action';
+    var t = action.type;
+    var label = action.title || action.id || action.file || action.agent || '';
+    return label ? t + ': ' + label : t;
+  }
+  function renderActionResults(actions, results) {
+    if (!actions || !actions.length) return;
+    for (var i = 0; i < actions.length; i++) {
+      var action = actions[i];
+      var r = (results && results[i]) || null;
+      var label = describeAction(action);
+      var severity = 'ok';
+      var symbol = '✓';
+      var detail = '';
+      if (r && r.error) { severity = 'err'; symbol = '✗'; detail = ' — ' + r.error; }
+      else if (r && r.warning) { severity = 'warn'; symbol = 'ℹ'; detail = ' — ' + r.warning; }
+      else if (r && r.duplicate) { severity = 'warn'; symbol = '↺'; detail = ' (already exists)'; }
+      var text = symbol + ' ' + label + detail;
+      appendActionStatus(severity, text);
+      messages.push({ role: 'action', severity: severity, text: text });
+    }
+    saveState();
+  }
+
+  async function sendMessage() {
+    if (sending) return;
+    var text = inputEl.value.trim();
+    if (!text) return;
+
+    appendBubble('user', text);
+    messages.push({ role: 'user', text: text });
+    saveState();
+
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+    setSending(true);
+
+    var stream = buildStreamBubble();
+    var streamedText = '';
+    abortController = new AbortController();
+    var userAborted = false;
+    var timeoutSignal = null;
+    try { timeoutSignal = AbortSignal.timeout(STREAM_TIMEOUT_MS); } catch (_e) { /* old browsers */ }
+    var signal = timeoutSignal && AbortSignal.any
+      ? AbortSignal.any([abortController.signal, timeoutSignal])
+      : abortController.signal;
+
+    try {
+      var res = await fetch('/api/command-center/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, tabId: tabId, sessionId: sessionId }),
+        signal: signal,
+      });
+      if (!res.ok) {
+        var errBody = await res.text().catch(function() { return ''; });
+        throw new Error('HTTP ' + res.status + (errBody ? ': ' + errBody.slice(0, 200) : ''));
+      }
+      if (!res.body || !res.body.getReader) {
+        throw new Error('Streaming not supported by this browser.');
+      }
+
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      var buf = '';
+      var doneEvt = null;
+      var errorEvt = null;
+
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        buf += decoder.decode(r.value, { stream: true });
+        var lines = buf.split('\n');
+        buf = lines.pop();
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (!line.startsWith('data: ')) continue;
+          var evt;
+          try { evt = JSON.parse(line.slice(6)); } catch (_e) { continue; }
+          if (evt.type === 'chunk') {
+            streamedText += (evt.text || '');
+            stream.setText(streamedText);
+          } else if (evt.type === 'tool') {
+            stream.addTool(evt.name, evt.input || {});
+          } else if (evt.type === 'heartbeat') {
+            /* server keep-alive — ignored on purpose */
+          } else if (evt.type === 'done') {
+            doneEvt = evt;
+          } else if (evt.type === 'error') {
+            errorEvt = evt;
+          }
+        }
+      }
+
+      if (errorEvt) {
+        stream.replaceWithError(errorEvt.error || 'Error');
+        messages.push({ role: 'error', text: errorEvt.error || 'Error' });
+        saveState();
+        return;
+      }
+
+      if (doneEvt) {
+        var finalText = (doneEvt.text != null && doneEvt.text !== '') ? doneEvt.text : streamedText;
+        stream.finalize(finalText || '(no response)');
+        messages.push({ role: 'assistant', text: finalText || '(no response)' });
+        if (doneEvt.sessionId !== undefined) sessionId = doneEvt.sessionId || null;
+        saveState();
+        if (doneEvt.actionParseError) {
+          var pe = '⚠️ Actions block emitted but JSON could not be parsed — no actions executed.';
+          appendActionStatus('err', pe);
+          messages.push({ role: 'action', severity: 'err', text: pe });
+          saveState();
+        }
+        if (doneEvt.actions && doneEvt.actions.length > 0) {
+          renderActionResults(doneEvt.actions, doneEvt.actionResults || []);
+        }
+        // Refresh status + history opportunistically — actions probably
+        // changed something.
+        scheduleStatusRefresh(800);
+      } else {
+        stream.finalize(streamedText || '(stream ended before completion)');
+        messages.push({ role: 'assistant', text: streamedText || '(stream ended before completion)' });
+        saveState();
+      }
+    } catch (e) {
+      if (e && (e.name === 'AbortError' || /aborted/i.test(String(e.message || '')))) {
+        userAborted = true;
+        if (streamedText) {
+          stream.finalize(streamedText);
+          messages.push({ role: 'assistant', text: streamedText });
+        } else {
+          stream.replaceWithError('Stopped.');
+          messages.push({ role: 'error', text: 'Stopped.' });
+        }
+        saveState();
+      } else {
+        var msg = 'Send failed: ' + (e && e.message ? e.message : e);
+        stream.replaceWithError(msg);
+        messages.push({ role: 'error', text: msg });
+        saveState();
+      }
+    } finally {
+      setSending(false);
+      abortController = null;
+      if (!userAborted) inputEl.focus();
+    }
+  }
+
+  function abortInFlight() {
+    if (!sending || !abortController) return;
+    try {
+      fetch('/api/command-center/abort', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabId: tabId }),
+      }).catch(function() {});
+    } catch (_e) { /* ignore */ }
+    try { abortController.abort(); } catch (_e) { /* ignore */ }
+  }
+
+  async function slimChatNew() {
+    if (sending) abortInFlight();
+    sessionId = null;
+    messages = [];
+    saveState();
+    rerenderHistory();
+    try {
+      fetch('/api/cc-sessions/' + encodeURIComponent(tabId), { method: 'DELETE' }).catch(function() {});
+    } catch (_e) { /* ignore */ }
+    inputEl.focus();
+  }
+
+  var newChatBtn = document.getElementById('slim-new-chat-btn');
+  if (newChatBtn) newChatBtn.addEventListener('click', slimChatNew);
+  sendBtn.addEventListener('click', sendMessage);
+  stopBtn.addEventListener('click', abortInFlight);
+  inputEl.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      sendMessage();
+    }
+  });
+  inputEl.addEventListener('input', function() {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 130) + 'px';
+  });
+
+  inputEl.focus();
+
+  // ── Status cockpit + history feed ──────────────────────────────
+  // Polls /api/status every 5s and updates the right column. The full
+  // dashboard exposes a richer SSE /api/status-stream; we use plain
+  // polling for round 1 to keep the slim self-contained. Round-2 should
+  // switch to SSE so the "minions working" tile reacts in real time.
+
+  var STATUS_POLL_MS = 5000;
+  var pollTimer = null;
+  var refreshTimer = null;
+
+  function scheduleStatusRefresh(delay) {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(function() {
+      refreshTimer = null;
+      pollStatusOnce();
+    }, delay || 0);
+  }
+
+  // Apply lit-state and value/detail text to a tile.
+  function updateTile(key, value, detail, lit) {
+    var tile = document.querySelector('.cockpit-tile[data-tile="' + key + '"]');
+    if (!tile) return;
+    var valEl = tile.querySelector('.cockpit-value');
+    var detEl = tile.querySelector('.cockpit-detail');
+    if (valEl) {
+      valEl.textContent = (value === null || value === undefined) ? '—' : String(value);
+      valEl.classList.toggle('dim', !lit);
+    }
+    if (detEl) detEl.textContent = detail || '';
+    tile.classList.remove('lit-blue', 'lit-green', 'lit-amber', 'lit-red');
+    if (lit) tile.classList.add('lit-' + lit);
+  }
+
+  function describeDispatch(d) {
+    var who = d.agent || d.dispatched_to || 'someone';
+    var what = d.title || d.workItemTitle || d.id || '(untitled)';
+    return who + ' — ' + what;
+  }
+
+  function applyStatus(data) {
+    if (!data) return;
+    // ── Engine tile ────────────────────────────────────────────
+    var engine = data.engine || {};
+    var engineRunning = !!(engine.codeVersion || engine.running || engine.startedAt);
+    var engineMode = engine.controlState || engine.mode || (engineRunning ? 'running' : 'stopped');
+    if (typeof engineMode !== 'string') engineMode = engineRunning ? 'running' : 'stopped';
+    var engineLit = engineRunning && engineMode !== 'stopped' ? 'green' : (engineMode === 'paused' ? 'amber' : 'red');
+    updateTile(
+      'engine',
+      engineRunning ? engineMode : 'down',
+      engine.startedAt ? 'up since ' + relTime(engine.startedAt) : '—',
+      engineLit
+    );
+
+    // ── Dispatches + minions ───────────────────────────────────
+    var dispatch = data.dispatch || {};
+    var active = Array.isArray(dispatch.active) ? dispatch.active : [];
+    var pending = Array.isArray(dispatch.pending) ? dispatch.pending : [];
+    var completed = Array.isArray(dispatch.completed) ? dispatch.completed : [];
+    var workingAgents = {};
+    for (var i = 0; i < active.length; i++) {
+      var a = active[i].agent || active[i].dispatched_to;
+      if (a) workingAgents[a] = true;
+    }
+    var workingCount = Object.keys(workingAgents).length;
+    updateTile(
+      'dispatches',
+      active.length,
+      active.length ? 'in flight' : 'none in flight',
+      active.length ? 'blue' : null
+    );
+    updateTile(
+      'minions',
+      workingCount,
+      workingCount ? Object.keys(workingAgents).slice(0, 3).join(', ') : 'all idle',
+      workingCount ? 'green' : null
+    );
+    updateTile(
+      'queued',
+      pending.length,
+      pending.length ? 'waiting to spawn' : 'queue empty',
+      pending.length ? 'amber' : null
+    );
+
+    // ── PR tile (status snapshot from cached pull-requests) ─────
+    var prs = Array.isArray(data.pullRequests) ? data.pullRequests : [];
+    var activePrs = prs.filter(function(p) {
+      return p && (p.status === 'active' || p.status === 'linked');
+    });
+    var failingPrs = activePrs.filter(function(p) { return p.buildStatus === 'failing'; });
+    var prDetail = activePrs.length === 0
+      ? 'no open PRs'
+      : (failingPrs.length ? failingPrs.length + ' failing build' + (failingPrs.length === 1 ? '' : 's')
+                           : 'all healthy');
+    updateTile(
+      'prs',
+      activePrs.length,
+      prDetail,
+      activePrs.length === 0 ? null : (failingPrs.length ? 'red' : 'blue')
+    );
+
+    // ── Watches tile ───────────────────────────────────────────
+    var watches = Array.isArray(data.watches) ? data.watches : [];
+    var activeWatches = watches.filter(function(w) { return w && w.status === 'active'; });
+    updateTile(
+      'watches',
+      activeWatches.length,
+      activeWatches.length ? 'monitoring' : 'no watches set',
+      activeWatches.length ? 'blue' : null
+    );
+
+    // ── Stamps + history ───────────────────────────────────────
+    var stamp = document.getElementById('cockpit-stamp');
+    if (stamp) stamp.textContent = 'updated ' + relTime(data.timestamp || Date.now());
+
+    renderHistoryFeed({ active: active, completed: completed, prs: activePrs });
+    var hStamp = document.getElementById('history-stamp');
+    if (hStamp) hStamp.textContent = relTime(data.timestamp || Date.now());
+  }
+
+  function renderHistoryFeed(input) {
+    var listEl = document.getElementById('history-list');
+    if (!listEl) return;
+    var events = [];
+
+    // Active dispatches (blue) — at the top so users know what's running.
+    (input.active || []).forEach(function(d) {
+      var ts = d.startedAt || d.dispatchedAt || d.createdAt || d._ts;
+      events.push({
+        kind: 'dispatch',
+        kindLabel: 'Dispatch',
+        title: describeDispatch(d),
+        meta: 'started ' + relTime(ts) + (d.workItemId ? ' · ' + d.workItemId : ''),
+        ts: ts ? Date.parse(ts) || Date.now() : Date.now(),
+      });
+    });
+
+    // Recent completions (green or red) — last 12 most recent first.
+    (input.completed || []).slice().reverse().slice(0, 12).forEach(function(c) {
+      var ok = c.result === 'success' || c.status === 'done';
+      var ts = c.completedAt || c.endedAt || c.startedAt || c._ts;
+      var who = c.agent || c.dispatched_to || 'someone';
+      var what = c.title || c.workItemTitle || c.id || '(work item)';
+      var prSuffix = c.pr ? ' · PR ' + c.pr : '';
+      events.push({
+        kind: ok ? 'completion' : 'failure',
+        kindLabel: ok ? 'Completion' : 'Failure',
+        title: who + ' — ' + what,
+        meta: (ok ? 'finished ' : 'failed ') + relTime(ts) + prSuffix +
+              (c.summary ? ' · ' + String(c.summary).slice(0, 90) : ''),
+        ts: ts ? Date.parse(ts) || 0 : 0,
+      });
+    });
+
+    // PR events (amber) — shows PRs we're tracking, anchored on updatedAt.
+    (input.prs || []).slice(0, 6).forEach(function(p) {
+      var ts = p.updatedAt || p.createdAt;
+      events.push({
+        kind: 'pr',
+        kindLabel: 'PR',
+        title: '#' + (p.prNumber || p.id || '?') + ' — ' + (p.title || '(untitled PR)'),
+        meta: (p.buildStatus || 'no-build') + ' · ' + (p.reviewStatus || 'no-review') +
+              (p.url ? ' · <a href="' + p.url + '" target="_blank" rel="noopener">open</a>' : ''),
+        ts: ts ? Date.parse(ts) || 0 : 0,
+      });
+    });
+
+    events.sort(function(a, b) { return (b.ts || 0) - (a.ts || 0); });
+    events = events.slice(0, 20);
+
+    if (events.length === 0) {
+      listEl.innerHTML = '<div class="history-empty">Nothing has happened yet — Command Center will fill this in.</div>';
+      return;
+    }
+    listEl.innerHTML = events.map(function(e) {
+      return (
+        '<div class="history-item kind-' + escHtml(e.kind) + '">' +
+          '<div class="history-head">' +
+            '<span class="history-kind">' + escHtml(e.kindLabel) + '</span>' +
+            '<span class="history-time">' + escHtml(e.ts ? relTime(e.ts) : '') + '</span>' +
+          '</div>' +
+          '<div class="history-title">' + escHtml(e.title) + '</div>' +
+          // history-meta intentionally allows the PR open-link <a>; we built
+          // the substring above with explicit escaping otherwise.
+          '<div class="history-meta">' + e.meta + '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  async function pollStatusOnce() {
+    try {
+      var res = await fetch('/api/status', { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      applyStatus(data);
+    } catch (e) {
+      // Soft failure — leave previous values, surface in stamp
+      var stamp = document.getElementById('cockpit-stamp');
+      if (stamp) stamp.textContent = 'status fetch failed: ' + (e.message || e);
+    }
+  }
+
+  function startStatusPolling() {
+    pollStatusOnce();
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollStatusOnce, STATUS_POLL_MS);
+  }
+  // Pause polling when the tab is hidden; resume when it's visible again.
+  // Saves us 12 fetches/min on background tabs.
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    } else {
+      startStatusPolling();
+    }
+  });
+  startStatusPolling();
+})();
+</script>
+</body>
+</html>
